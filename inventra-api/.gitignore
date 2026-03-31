@@ -1,0 +1,8 @@
+output
+.stack.pickle
+.coverage
+__pycache__
+.env
+tasks.json
+.pytest_cache
+.venv/

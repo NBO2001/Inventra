@@ -1,0 +1,16 @@
+[flake8]
+ignore = E266,E203,W503
+max-line-length = 120
+max-complexity = 18
+select = B,C,E,F,W,T4,B9
+exclude = 
+	__pycache__
+	.venv
+    .git
+    .tox
+    .venv
+    .vscode
+    .pytest_cache
+    .mypy_cache
+per-file-ignores = 
+    tests/*: F401
