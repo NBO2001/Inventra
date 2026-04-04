@@ -47,6 +47,7 @@ async def test_collect_page_html_and_publish_to_items_with_valid_page_should_ret
             value_total=47.48,
             unit="kg",
             key_access="00000000000000000000000000000000000000000000",
+            hash="000000000000000000000000000000000000000000002023-09-01T12:00:00",
         )
         in published_data.itens
     )

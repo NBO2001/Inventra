@@ -7,3 +7,4 @@ tasks.json
 .pytest_cache
 .venv/
 .codex
+tasks/
