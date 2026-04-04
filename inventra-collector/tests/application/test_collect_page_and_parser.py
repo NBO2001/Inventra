@@ -25,11 +25,13 @@ async def test_collect_page_html_and_publish_to_items_with_valid_page_should_ret
     with open("inventra-collector/mock-pages/page-mock.html", "r") as file:
         page_html = file.read()
 
-    respx.get("https://www.example.com/example-endpoint?p=0000000000000000000").mock(
-        return_value=httpx.Response(200, content=page_html)
-    )
+    respx.get(
+        "https://www.example.com/example-endpoint?p=00000000000000000000000000000000000000000000"
+    ).mock(return_value=httpx.Response(200, content=page_html))
 
-    result = await collect_page_and_publish(key_access="0000000000000000000")
+    result = await collect_page_and_publish(
+        key_access="00000000000000000000000000000000000000000000"
+    )
 
     publisher.publish.assert_called_once()
 
@@ -44,6 +46,7 @@ async def test_collect_page_html_and_publish_to_items_with_valid_page_should_ret
             quantity=1,
             value_total=47.48,
             unit="kg",
+            key_access="00000000000000000000000000000000000000000000",
         )
         in published_data.itens
     )
