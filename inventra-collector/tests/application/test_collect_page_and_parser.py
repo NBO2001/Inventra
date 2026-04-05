@@ -1,81 +1,120 @@
-import math
+import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
 
-import httpx
-import pytest
-import respx
 from inventra_collector.application.collect_page_and_publish import (
     collect_page_and_publish,
 )
-from inventra_collector.domain import Item, Itens
-from inventra_collector.infrastructure import Config
+from inventra_collector.infrastructure.config import Config
 
 
-@pytest.mark.asyncio
-@respx.mock(assert_all_mocked=True)
-async def test_collect_page_html_and_publish_to_items_with_valid_page_should_return_items(
-    mocker,
-):
+class StubLimiter:
+    def __init__(self) -> None:
+        self.calls = 0
 
-    mocker.patch.object(
-        Config.SefazApi, "url", "https://www.example.com/example-endpoint"
+    async def acquire(self) -> None:
+        self.calls += 1
+
+
+class StubPublisher:
+    def __init__(self) -> None:
+        self.payloads = []
+
+    async def publish(self, payload, *, key=None) -> None:
+        self.payloads.append((payload, key))
+
+
+class StubResponse:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class StubClient:
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.requested_urls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, url: str) -> StubResponse:
+        self.requested_urls.append(url)
+        return StubResponse(self._text)
+
+
+def fixture_path(name: str) -> Path:
+    return Path(__file__).resolve().parents[2] / "mock-pages" / name
+
+
+def test_collect_page_html_and_publish_to_items_with_valid_page_should_return_items():
+    Config.SefazApi.url = "https://www.example.com/example-endpoint"
+    publisher = StubPublisher()
+    limiter = StubLimiter()
+    page_html = fixture_path("page-mock.html").read_text()
+    client = StubClient(page_html)
+    collected_at = datetime(2026, 2, 3, 18, 56, 21, tzinfo=timezone.utc)
+    expected_hash = (
+        "00000000000000000000000000000000000000000000" f":{collected_at.isoformat()}"
     )
 
-    publisher = mocker.AsyncMock()
-
-    with open("inventra-collector/mock-pages/page-mock.html", "r") as file:
-        page_html = file.read()
-
-    respx.get(
-        "https://www.example.com/example-endpoint?p=00000000000000000000000000000000000000000000"
-    ).mock(return_value=httpx.Response(200, content=page_html))
-
-    result = await collect_page_and_publish(
-        key_access="00000000000000000000000000000000000000000000"
-    )
-
-    publisher.publish.assert_called_once()
-
-    published_data = publisher.publish.call_args.args[0]
-    assert result is True
-    assert isinstance(published_data, Itens)
-    assert len(published_data.itens) == 7
-    assert (
-        Item(
-            description="ling tipo calab perdigao kg",
-            value_unit=47.48,
-            quantity=1,
-            value_total=47.48,
-            unit="kg",
+    result = asyncio.run(
+        collect_page_and_publish(
             key_access="00000000000000000000000000000000000000000000",
-            hash="000000000000000000000000000000000000000000002023-09-01T12:00:00",
+            publisher=publisher,
+            rate_limiter=limiter,
+            now_fn=lambda: collected_at,
+            client_factory=lambda: client,
         )
-        in published_data.itens
-    )
-    assert math.isclose(
-        sum([item.value_total for item in published_data.itens]), 99.97, rel_tol=1e-2
     )
 
+    assert result is True
+    assert limiter.calls == 1
+    assert client.requested_urls == [
+        (
+            "https://www.example.com/example-endpoint"
+            "?p=00000000000000000000000000000000000000000000"
+        )
+    ]
+    assert len(publisher.payloads) == 1
 
-@pytest.mark.asyncio
-@respx.mock(assert_all_mocked=True)
-async def test_collect_page_html_and_publish_to_items_with_invalid_page_should_return_empty_items(
-    mocker,
-):
+    published_data, key = publisher.payloads[0]
+    assert key == "00000000000000000000000000000000000000000000"
+    assert len(published_data["itens"]) == 7
+    assert {
+        "description": "ling tipo calab perdigao kg",
+        "value_unit": 47.48,
+        "quantity": 1.0,
+        "value_total": 47.48,
+        "unit": "kg",
+        "key_access": "00000000000000000000000000000000000000000000",
+        "hash": expected_hash,
+    } in published_data["itens"]
+    assert {item["hash"] for item in published_data["itens"]} == {expected_hash}
 
-    mocker.patch.object(
-        Config.SefazApi, "url", "https://www.example.com/example-endpoint"
-    )
 
-    publisher = mocker.AsyncMock()
+def test_collect_page_html_and_publish_to_items_with_invalid_page_should_not_publish():
+    Config.SefazApi.url = "https://www.example.com/example-endpoint"
+    publisher = StubPublisher()
+    limiter = StubLimiter()
+    page_html = fixture_path("page-mock-invalid.html").read_text()
 
-    with open("inventra-collector/mock-pages/page-mock-invalid.html", "r") as file:
-        page_html = file.read()
+    import pytest
 
-    respx.get("https://www.example.com/example-endpoint?p=0000000000000000000").mock(
-        return_value=httpx.Response(200, content=page_html)
-    )
+    with pytest.raises(ValueError):
+        asyncio.run(
+            collect_page_and_publish(
+                key_access="0000000000000000000",
+                publisher=publisher,
+                rate_limiter=limiter,
+                client_factory=lambda: StubClient(page_html),
+            )
+        )
 
-    result = await collect_page_and_publish(key_access="0000000000000000000")
-
-    publisher.publish.assert_not_called()
-    assert result is False
+    assert limiter.calls == 1
+    assert publisher.payloads == []

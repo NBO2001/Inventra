@@ -1,0 +1,1 @@
+"""Inventra collector package."""

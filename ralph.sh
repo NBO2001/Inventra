@@ -116,11 +116,14 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   
   # Check for completion signal only in the final assistant message.
   if [[ -f "$LAST_MESSAGE_FILE" ]] && grep -q "<promise>COMPLETE</promise>" "$LAST_MESSAGE_FILE"; then
-    echo ""
-    echo "Ralph completed all tasks!"
-    echo "Completed at iteration $i of $MAX_ITERATIONS"
-    rm -f "$LAST_MESSAGE_FILE"
-    exit 0
+    DOUBLE_CHECK=$(codex exec --yolo -C "$SCRIPT_DIR" "Double-check if all tasks are truly complete. Respond with <promise>COMPLETE</promise> if everything is done, or <promise>INCOMPLETE</promise> if there are still tasks remaining." 2>&1)
+    if [[ "$DOUBLE_CHECK" == *"<promise>COMPLETE</promise>"* ]]; then
+      echo ""
+      echo "Ralph completed all tasks!"
+      echo "Completed at iteration $i of $MAX_ITERATIONS"
+      rm -f "$LAST_MESSAGE_FILE"
+      exit 0
+    fi
   fi
 
   rm -f "$LAST_MESSAGE_FILE"
