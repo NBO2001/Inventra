@@ -2,7 +2,7 @@
 # Ralph Wiggum - Long-running AI agent loop
 # Usage: ./ralph.sh [--tool codex] [max_iterations]
 
-set -e
+set -euo pipefail
 
 # Parse arguments
 TOOL="codex"
@@ -38,7 +38,15 @@ PRD_FILE="$SCRIPT_DIR/prd.json"
 PROGRESS_FILE="$SCRIPT_DIR/progress.txt"
 ARCHIVE_DIR="$SCRIPT_DIR/archive"
 LAST_BRANCH_FILE="$SCRIPT_DIR/.last-branch"
+LAST_PRD_SNAPSHOT="$SCRIPT_DIR/.last-prd.json"
 PROMPT_FILE="$SCRIPT_DIR/prompt.md"
+
+for dependency in codex jq; do
+  if ! command -v "$dependency" >/dev/null 2>&1; then
+    echo "Error: Missing required dependency '$dependency'."
+    exit 1
+  fi
+done
 
 # Archive previous run if branch changed
 if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
@@ -54,7 +62,11 @@ if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
     
     echo "Archiving previous run: $LAST_BRANCH"
     mkdir -p "$ARCHIVE_FOLDER"
-    [ -f "$PRD_FILE" ] && cp "$PRD_FILE" "$ARCHIVE_FOLDER/"
+    if [ -f "$LAST_PRD_SNAPSHOT" ]; then
+      cp "$LAST_PRD_SNAPSHOT" "$ARCHIVE_FOLDER/prd.json"
+    elif [ -f "$PRD_FILE" ]; then
+      cp "$PRD_FILE" "$ARCHIVE_FOLDER/"
+    fi
     [ -f "$PROGRESS_FILE" ] && cp "$PROGRESS_FILE" "$ARCHIVE_FOLDER/"
     echo "   Archived to: $ARCHIVE_FOLDER"
     
@@ -71,6 +83,7 @@ if [ -f "$PRD_FILE" ]; then
   if [ -n "$CURRENT_BRANCH" ]; then
     echo "$CURRENT_BRANCH" > "$LAST_BRANCH_FILE"
   fi
+  cp "$PRD_FILE" "$LAST_PRD_SNAPSHOT"
 fi
 
 # Initialize progress file if it doesn't exist
@@ -88,20 +101,35 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   echo "  Ralph Iteration $i of $MAX_ITERATIONS ($TOOL)"
   echo "==============================================================="
 
+  LAST_MESSAGE_FILE=$(mktemp)
+
   # Run Codex with the Ralph prompt when available.
+  set +e
   if [[ -f "$PROMPT_FILE" ]]; then
-    OUTPUT=$(codex exec --full-auto -C "$SCRIPT_DIR" - < "$PROMPT_FILE" 2>&1 | tee /dev/stderr) || true
+    OUTPUT=$(codex exec --yolo -C "$SCRIPT_DIR" --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE" 2>&1 | tee /dev/stderr)
   else
-    OUTPUT=$(codex exec --full-auto -C "$SCRIPT_DIR" "Continue working on the current Ralph task using the repository context and stop only when everything is complete. Respond with <promise>COMPLETE</promise> when finished." 2>&1 | tee /dev/stderr) || true
+    OUTPUT=$(codex exec --yolo -C "$SCRIPT_DIR" --output-last-message "$LAST_MESSAGE_FILE" "Continue working on the current Ralph task using the repository context and stop only when everything is complete. Respond with <promise>COMPLETE</promise> when finished." 2>&1 | tee /dev/stderr)
+  fi
+  CODEX_EXIT=$?
+  set -e
+
+  if [[ $CODEX_EXIT -ne 0 ]]; then
+    echo "Codex exited with status $CODEX_EXIT. Continuing..."
+    rm -f "$LAST_MESSAGE_FILE"
+    sleep 2
+    continue
   fi
   
-  # Check for completion signal
-  if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
+  # Check for completion signal only in the final assistant message.
+  if [[ -f "$LAST_MESSAGE_FILE" ]] && grep -q "<promise>COMPLETE</promise>" "$LAST_MESSAGE_FILE"; then
     echo ""
     echo "Ralph completed all tasks!"
     echo "Completed at iteration $i of $MAX_ITERATIONS"
+    rm -f "$LAST_MESSAGE_FILE"
     exit 0
   fi
+
+  rm -f "$LAST_MESSAGE_FILE"
   
   echo "Iteration $i complete. Continuing..."
   sleep 2

@@ -8,3 +8,7 @@ tasks.json
 .venv/
 .codex
 tasks/
+archive/
+progress.txt
+.last-branch
+.last-prd.json
