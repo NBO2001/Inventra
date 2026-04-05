@@ -49,7 +49,7 @@ class StubClient:
 
 
 def fixture_path(name: str) -> Path:
-    return Path("/workspace/inventra-collector/mock-pages") / name
+    return Path(__file__).resolve().parents[2] / "mock-pages" / name
 
 
 def test_collect_page_html_and_publish_to_items_with_valid_page_should_return_items():

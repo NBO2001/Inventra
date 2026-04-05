@@ -1,7 +1,10 @@
 ## Codebase Patterns
-- Run `isort`, `black`, `flake8`, and `pytest` from `/workspace/inventra-collector` so the service-local config and imports resolve correctly.
+- Run `isort`, `black`, `flake8`, and `pytest` from the `inventra-collector/` service directory so the local config and imports resolve correctly.
 - The collector flow keeps transport concerns at the edges: the Kafka key carries `key_access`, while the Kafka value is retry metadata JSON with `attempt` and `next_try`.
 - Keep collector workflows injectable for tests by passing publishers, clocks, rate limiters, and client factories into application services.
+- Host processes must use Kafka at `127.0.0.1:29092`; the `kafka:9092` address is only resolvable from other containers on the Compose network.
+- Treat `Config.load(dotenv_path)` as authoritative for tests and local overrides by letting the dotenv file overwrite existing environment variables.
+- The collector must use an explicit Kafka consumer group; with a fresh group, `KAFKA_AUTO_OFFSET_RESET=earliest` is what makes existing topic backlog get consumed.
 
 # Ralph Progress Log
 Started: Sat Apr  4 19:31:15 PDT 2026
@@ -14,4 +17,22 @@ Started: Sat Apr  4 19:31:15 PDT 2026
   - `inventra-collector` is easiest to validate with service-local commands from its own directory; running linters from repo root can bypass local config.
   - The collector message contract is split intentionally: Kafka key for the business id, Kafka value for retry metadata only.
   - The application layer is set up for dependency injection, so tests should keep using stub publishers, clocks, and clients rather than external services.
+---
+## 2026-04-05 02:46:38 UTC - BUGFIX Kafka host listener
+- Fixed the local Kafka listener setup so host-based services connect through `127.0.0.1:29092` instead of being handed the Compose-only `kafka:9092` broker address.
+- Updated collector docs/config expectations and fixed config/fixture tests to be deterministic across local environments.
+- Files changed: `docker-compose.yml`, `inventra-collector/.env.example`, `inventra-collector/README.md`, `inventra-collector/AGENTS.md`, `inventra-collector/inventra_collector/infrastructure/config.py`, `inventra-collector/tests/application/test_collect_page_and_parser.py`, `inventra-collector/tests/infrastructure/test_config.py`, `progress.txt`
+- **Learnings for future iterations:**
+  - If the collector runs on the host, `kafka:9092` will fail DNS resolution after metadata refresh; use the host listener advertised as `127.0.0.1:29092`.
+  - Config-loading tests need `Config.load(dotenv_path)` to overwrite prior env state, otherwise earlier test values leak into later assertions.
+  - Test fixtures should be located relative to the repo rather than via a hardcoded `/workspace/...` path.
+---
+## 2026-04-05 02:55:20 UTC - BUGFIX Kafka consumer offsets
+- Configured the collector consumer with an explicit Kafka group id and `auto_offset_reset=earliest` so a fresh consumer group will process messages that were already present in `collector_ids`.
+- Added config validation and env documentation for the new Kafka consumer settings.
+- Files changed: `inventra-collector/.env.example`, `inventra-collector/README.md`, `inventra-collector/AGENTS.md`, `inventra-collector/main.py`, `inventra-collector/inventra_collector/infrastructure/config.py`, `inventra-collector/tests/infrastructure/test_config.py`, `progress.txt`
+- **Learnings for future iterations:**
+  - A subscribed consumer can look healthy in logs and still read nothing if it starts without a committed group offset and defaults to the end of the topic.
+  - Using an explicit group plus `earliest` is the safe default for local debugging when you expect backlog to be consumed.
+  - Once a group commits offsets, changing `auto_offset_reset` alone will not replay old messages; use a new group id when you need a clean reread.
 ---

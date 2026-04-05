@@ -14,7 +14,7 @@ def _load_dotenv(dotenv_path: Path) -> None:
             continue
 
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip())
+        os.environ[key.strip()] = value.strip()
 
 
 class Config:
@@ -22,6 +22,8 @@ class Config:
         bootstrap_servers = ""
         topic_collector_ids = ""
         topic_processed_data = ""
+        consumer_group_id = "inventra-collector"
+        auto_offset_reset = "earliest"
 
     class SefazApi:
         url = ""
@@ -42,6 +44,12 @@ class Config:
         cls.Kafka.bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "")
         cls.Kafka.topic_collector_ids = os.getenv("TOPIC_COLLECTOR_IDS", "")
         cls.Kafka.topic_processed_data = os.getenv("TOPIC_PROCESSED_DATA", "")
+        cls.Kafka.consumer_group_id = os.getenv(
+            "KAFKA_CONSUMER_GROUP_ID", "inventra-collector"
+        )
+        cls.Kafka.auto_offset_reset = os.getenv(
+            "KAFKA_AUTO_OFFSET_RESET", "earliest"
+        )
         cls.SefazApi.url = os.getenv("SEFAZ_API_URL", "")
         cls.Retry.max_attempts = int(os.getenv("RETRY_MAX_ATTEMPTS", "5"))
         cls.Retry.initial_delay_minutes = int(
@@ -77,3 +85,9 @@ class Config:
             raise ValueError("RETRY_INITIAL_DELAY_MINUTES must be greater than zero")
         if cls.RateLimit.requests_per_second <= 0:
             raise ValueError("RATE_LIMIT_REQUESTS_PER_SECOND must be greater than zero")
+        if not cls.Kafka.consumer_group_id:
+            raise ValueError("KAFKA_CONSUMER_GROUP_ID must not be empty")
+        if cls.Kafka.auto_offset_reset not in {"earliest", "latest", "none"}:
+            raise ValueError(
+                "KAFKA_AUTO_OFFSET_RESET must be one of: earliest, latest, none"
+            )

@@ -29,6 +29,9 @@ async def _main_async() -> None:
 
     consumer = AIOKafkaConsumer(
         bootstrap_servers=Config.Kafka.bootstrap_servers,
+        group_id=Config.Kafka.consumer_group_id,
+        auto_offset_reset=Config.Kafka.auto_offset_reset,
+        enable_auto_commit=True,
         key_deserializer=lambda value: value,
         value_deserializer=lambda value: value,
     )
