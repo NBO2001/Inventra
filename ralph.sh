@@ -39,7 +39,6 @@ PROGRESS_FILE="$SCRIPT_DIR/progress.txt"
 ARCHIVE_DIR="$SCRIPT_DIR/archive"
 LAST_BRANCH_FILE="$SCRIPT_DIR/.last-branch"
 LAST_PRD_SNAPSHOT="$SCRIPT_DIR/.last-prd.json"
-PROMPT_FILE="$SCRIPT_DIR/prompt.md"
 
 for dependency in codex jq; do
   if ! command -v "$dependency" >/dev/null 2>&1; then
@@ -103,13 +102,8 @@ for i in $(seq 1 $MAX_ITERATIONS); do
 
   LAST_MESSAGE_FILE=$(mktemp)
 
-  # Run Codex with the Ralph prompt when available.
   set +e
-  if [[ -f "$PROMPT_FILE" ]]; then
-    OUTPUT=$(codex exec --yolo -C "$SCRIPT_DIR" --output-last-message "$LAST_MESSAGE_FILE" - < "$PROMPT_FILE" 2>&1 | tee /dev/stderr)
-  else
-    OUTPUT=$(codex exec --yolo -C "$SCRIPT_DIR" --output-last-message "$LAST_MESSAGE_FILE" "Continue working on the current Ralph task using the repository context and stop only when everything is complete. Respond with <promise>COMPLETE</promise> when finished." 2>&1 | tee /dev/stderr)
-  fi
+  OUTPUT=$(codex exec --yolo -C "$SCRIPT_DIR" --output-last-message "$LAST_MESSAGE_FILE" "Continue working on the current Ralph task using the repository context and stop only when everything is complete. Respond with <promise>COMPLETE</promise> when finished." 2>&1 | tee /dev/stderr)
   CODEX_EXIT=$?
   set -e
 
