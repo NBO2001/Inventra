@@ -1,6 +1,6 @@
-def main():
-    print("Hello from inventra-collector!")
+import asyncio
 
+from inventra_collector.main import main
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
