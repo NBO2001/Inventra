@@ -7,7 +7,7 @@ from inventra_collector.application.collect_page_and_publish import (
     collect_page_and_publish,
 )
 from inventra_collector.domain import Item, Itens
-from inventra_collector.infrastructure import Config
+from inventra_collector.infrastructure.config import Config
 
 
 @pytest.mark.asyncio
