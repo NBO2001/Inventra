@@ -1,0 +1,17 @@
+## Codebase Patterns
+- Run `isort`, `black`, `flake8`, and `pytest` from `/workspace/inventra-collector` so the service-local config and imports resolve correctly.
+- The collector flow keeps transport concerns at the edges: the Kafka key carries `key_access`, while the Kafka value is retry metadata JSON with `attempt` and `next_try`.
+- Keep collector workflows injectable for tests by passing publishers, clocks, rate limiters, and client factories into application services.
+
+# Ralph Progress Log
+Started: Sat Apr  4 19:31:15 PDT 2026
+---
+## 2026-04-05 02:39:29 UTC - US-001..US-008
+- Implemented the `inventra_collector` package with Kafka consumer orchestration, retry scheduling, environment-driven config validation, HTML parsing, output publishing, and request rate limiting.
+- Added service-local tests for parsing/publishing, consumer retry behavior, config loading, and rate limiting, plus the missing invalid-page HTML fixture.
+- Files changed: `inventra-collector/AGENTS.md`, `inventra-collector/main.py`, `inventra-collector/inventra_collector/`, `inventra-collector/mock-pages/page-mock-invalid.html`, `inventra-collector/tests/application/test_collect_page_and_parser.py`, `inventra-collector/tests/application/test_consumer.py`, `inventra-collector/tests/infrastructure/`, `prd.json`, `progress.txt`
+- **Learnings for future iterations:**
+  - `inventra-collector` is easiest to validate with service-local commands from its own directory; running linters from repo root can bypass local config.
+  - The collector message contract is split intentionally: Kafka key for the business id, Kafka value for retry metadata only.
+  - The application layer is set up for dependency injection, so tests should keep using stub publishers, clocks, and clients rather than external services.
+---
