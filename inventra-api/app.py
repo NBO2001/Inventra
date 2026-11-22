@@ -257,7 +257,7 @@ def api_create_receipt():
             ),
         )
         receipt_id = cursor.fetchone()["id"]
-        db().executemany(
+        db().cursor().executemany(
             """INSERT INTO items
             (receipt_id, name, product_key, code, quantity, unit, unit_price, amount)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
