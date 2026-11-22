@@ -7,18 +7,23 @@ Receipt-based grocery spending and next-trip planning for Manaus. The agreed pro
 | Directory | Purpose |
 | --- | --- |
 | `inventra-web/` | Next.js interface: private dashboard, receipt import, list planning, sharing settings, and public product-price pages. |
-| `inventra-api/` | Flask/SQLite API: SEFAZ-AM NFC-e import, monthly totals, replenishment, sharing, and price comparisons. |
+| `inventra-api/` | Flask/PostgreSQL API: SEFAZ-AM NFC-e import, monthly totals, replenishment, sharing, and price comparisons. |
 | `inventra-collector/` | Existing Kafka-based receipt collector. It remains separate from the web/API prototype. |
 
 ## Run the local prototype
 
-Requires Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node.js 20.9+.
+Requires Python 3.12+, [uv](https://docs.astral.sh/uv/), Node.js 20.9+, and Docker Compose.
+
+Start PostgreSQL and apply schema migrations:
+
+```bash
+make setup
+```
 
 Terminal 1:
 
 ```bash
 cd inventra-api
-uv sync
 uv run python app.py
 ```
 
@@ -38,7 +43,9 @@ On a phone, **Escanear QR com a câmera** opens the camera to photograph the NFC
 
 This prototype has no login, so use a trusted network while it is running.
 
-The API stores local data at `inventra-api/instance/receipts.sqlite3`, which is ignored by Git. The private receipts supplied in the earlier workspace were **not** copied into this repository.
+The API connects through `DATABASE_URL` (default: `postgresql://inventra:inventra@127.0.0.1:5432/inventra`). PostgreSQL data lives in the `postgres_data` Docker volume. The old SQLite file is not deleted. To transfer existing receipts, run `uv run python import_sqlite.py instance/receipts.sqlite3` from `inventra-api/` after starting PostgreSQL. The importer skips receipts already transferred, so it can be rerun.
+
+From the repository root, use `make api` and `make web` in separate terminals. `make migrate` applies pending schema changes, `make db-stop` stops PostgreSQL, and `make import-sqlite` transfers the default old SQLite file. Set `SQLITE_FILE=/path/to/receipts.sqlite3` to import a different file. Use `make help` to list commands.
 
 ## Checks
 

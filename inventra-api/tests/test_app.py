@@ -1,10 +1,17 @@
 from datetime import date
 from io import BytesIO
+import os
+import sqlite3
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
+import psycopg
+from psycopg import sql
 
 from app import app, db
+from import_sqlite import import_sqlite
+from migrate import DEFAULT_URL, migrate
 from receipt_parser import parse_receipt
 
 SAMPLE = (
@@ -16,9 +23,76 @@ SAMPLE = (
 
 
 @pytest.fixture
-def client(tmp_path):
-    app.config.update(TESTING=True, DATABASE=str(tmp_path / "test.sqlite3"))
-    return app.test_client()
+def database_url():
+    base_url = os.environ.get("TEST_DATABASE_URL", DEFAULT_URL)
+    try:
+        admin = psycopg.connect(base_url)
+    except psycopg.OperationalError:
+        pytest.skip(
+            "PostgreSQL is unavailable; start it with docker compose up -d postgres"
+        )
+    schema = "test_" + uuid4().hex
+    with admin:
+        admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+    test_url = psycopg.conninfo.make_conninfo(
+        base_url, options=f"-c search_path={schema}"
+    )
+    try:
+        migrate(test_url)
+        yield test_url
+    finally:
+        with psycopg.connect(base_url) as cleanup:
+            cleanup.execute(
+                sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema))
+            )
+
+
+@pytest.fixture
+def client(database_url):
+    previous = dict(app.config)
+    app.config.update(TESTING=True, DATABASE_URL=database_url)
+    try:
+        yield app.test_client()
+    finally:
+        app.config.update(previous)
+
+
+def test_migrations_are_idempotent(database_url):
+    migrate(database_url)
+    with psycopg.connect(database_url) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 1
+        assert conn.execute("SELECT share_mode FROM settings").fetchone()[0] == "ask"
+
+
+def test_sqlite_import_preserves_receipts_and_is_repeatable(database_url, tmp_path):
+    source = tmp_path / "receipts.sqlite3"
+    with sqlite3.connect(source) as old:
+        old.executescript("""
+            CREATE TABLE settings (id INTEGER, share_mode TEXT);
+            INSERT INTO settings VALUES (1, 'always');
+            CREATE TABLE receipts (id INTEGER, key_hash TEXT, store TEXT,
+                store_cnpj TEXT, issued_at TEXT, total TEXT, discount TEXT,
+                approx_tax TEXT, shared INTEGER, created_at TEXT);
+            INSERT INTO receipts VALUES (7, 'hash', 'Market', NULL, '2026-01-01',
+                '10.00', '0', '1.00', 1, '2026-01-01 12:00:00');
+            CREATE TABLE items (id INTEGER, receipt_id INTEGER, name TEXT,
+                product_key TEXT, code TEXT, quantity TEXT, unit TEXT,
+                unit_price TEXT, amount TEXT);
+            INSERT INTO items VALUES (3, 7, 'Rice', 'RICE | UN', NULL,
+                '1', 'UN', '10.00', '10.00');
+            CREATE TABLE dismissed_suggestions (product_key TEXT, last_bought TEXT);
+            INSERT INTO dismissed_suggestions VALUES ('RICE | UN', '2026-01-01');
+        """)
+    assert import_sqlite(source, database_url) == 1
+    assert import_sqlite(source, database_url) == 0
+    with psycopg.connect(database_url) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM receipts").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+        assert conn.execute("SELECT share_mode FROM settings").fetchone()[0] == "always"
+        assert (
+            conn.execute("SELECT last_bought FROM dismissed_suggestions").fetchone()[0]
+            == "2026-01-01"
+        )
 
 
 def upload(client, share="no"):
@@ -86,16 +160,17 @@ def test_trip_split_respects_store_limit_and_quantities(client):
             cursor = connection.execute(
                 """INSERT INTO receipts
                 (key_hash, store, issued_at, total, discount, shared)
-                VALUES (?, ?, ?, '101', '0', 0)""",
+                VALUES (%s, %s, %s, '101', '0', 0) RETURNING id""",
                 (f"synthetic-{store}", store, date.today().isoformat()),
             )
+            receipt_id = cursor.fetchone()["id"]
             for row, price in zip(products, prices):
                 connection.execute(
                     """INSERT INTO items
                     (receipt_id, name, product_key, quantity, unit, unit_price, amount)
-                    VALUES (?, ?, ?, '1', ?, ?, ?)""",
+                    VALUES (%s, %s, %s, '1', %s, %s, %s)""",
                     (
-                        cursor.lastrowid,
+                        receipt_id,
                         row["name"],
                         row["product_key"],
                         row["unit"],
