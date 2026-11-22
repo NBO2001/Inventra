@@ -12,4 +12,8 @@ archive/
 progress.txt
 .last-branch
 .last-prd.json
+inventra-api/instance/
+inventra-web/node_modules/
+inventra-web/.next/
+inventra-web/tsconfig.tsbuildinfo
 prd.json
