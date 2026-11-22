@@ -4,26 +4,24 @@ from __future__ import annotations
 
 import os
 import re
-import sqlite3
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
-from pathlib import Path
 from statistics import median
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 from flask import Flask, g, jsonify, request
+import psycopg
+from psycopg.rows import dict_row
 
+from migrate import DEFAULT_URL, migrate
 from receipt_parser import ReceiptParseError, parse_receipt
 
-BASE = Path(__file__).resolve().parent
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "local-development-only")
-app.config["DATABASE"] = os.environ.get(
-    "DATABASE", str(BASE / "instance" / "receipts.sqlite3")
-)
+app.config["DATABASE_URL"] = os.environ.get("DATABASE_URL", DEFAULT_URL)
 app.config["MAX_CONTENT_LENGTH"] = 1_000_000
 SEFAZ_HOST = "sistemas.sefaz.am.gov.br"
 PRICE_MAX_AGE_DAYS = 30  # Pilot default; validate with Manaus shoppers.
@@ -31,12 +29,7 @@ PRICE_MAX_AGE_DAYS = 30  # Pilot default; validate with Manaus shoppers.
 
 def db():
     if "db" not in g:
-        path = Path(app.config["DATABASE"])
-        path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        g.db = connection
+        g.db = psycopg.connect(app.config["DATABASE_URL"], row_factory=dict_row)
     return g.db
 
 
@@ -45,52 +38,6 @@ def close_db(_error):
     connection = g.pop("db", None)
     if connection:
         connection.close()
-
-
-def init_db():
-    db().executescript("""
-        CREATE TABLE IF NOT EXISTS settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            share_mode TEXT NOT NULL DEFAULT 'ask'
-                CHECK (share_mode IN ('ask', 'always', 'never'))
-        );
-        INSERT OR IGNORE INTO settings (id, share_mode) VALUES (1, 'ask');
-        CREATE TABLE IF NOT EXISTS receipts (
-            id INTEGER PRIMARY KEY,
-            key_hash TEXT NOT NULL UNIQUE,
-            store TEXT NOT NULL,
-            store_cnpj TEXT,
-            issued_at TEXT NOT NULL,
-            total TEXT NOT NULL,
-            discount TEXT NOT NULL,
-            approx_tax TEXT,
-            shared INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS items (
-            id INTEGER PRIMARY KEY,
-            receipt_id INTEGER NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
-            name TEXT NOT NULL,
-            product_key TEXT NOT NULL,
-            code TEXT,
-            quantity TEXT NOT NULL,
-            unit TEXT NOT NULL,
-            unit_price TEXT NOT NULL,
-            amount TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_items_product ON items(product_key);
-        CREATE INDEX IF NOT EXISTS idx_receipts_date ON receipts(issued_at);
-        CREATE TABLE IF NOT EXISTS dismissed_suggestions (
-            product_key TEXT PRIMARY KEY,
-            last_bought TEXT NOT NULL
-        );
-    """)
-    db().commit()
-
-
-@app.before_request
-def prepare():
-    init_db()
 
 
 def product_key(name: str, unit: str) -> str:
@@ -131,7 +78,7 @@ def fetch_qr_url(url: str) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def optimize_trip(selected: list[sqlite3.Row], limit: int):
+def optimize_trip(selected: list[dict], limit: int):
     """Exact search over store combinations; unpriced products remain unresolved."""
     from itertools import combinations
 
@@ -145,7 +92,7 @@ def optimize_trip(selected: list[sqlite3.Row], limit: int):
             """SELECT i.product_key, i.amount, i.quantity,
         r.store, r.issued_at
         FROM items i JOIN receipts r ON r.id = i.receipt_id
-        WHERE r.issued_at >= ?
+        WHERE r.issued_at >= %s
         ORDER BY r.issued_at DESC, r.id DESC, i.id DESC""",
             (cutoff,),
         )
@@ -255,7 +202,9 @@ def api_dashboard():
         for month, data in sorted(monthly.items(), reverse=True)
     ]
     available_store_count = (
-        db().execute("SELECT COUNT(DISTINCT store) FROM receipts").fetchone()[0]
+        db()
+        .execute("SELECT COUNT(DISTINCT store) AS count FROM receipts")
+        .fetchone()["count"]
     )
     return jsonify(
         receipts=[dict(row) for row in receipts],
@@ -279,7 +228,7 @@ def api_create_receipt():
         fingerprint = sha256(parsed["access_key"].encode()).hexdigest()
         existing = (
             db()
-            .execute("SELECT id FROM receipts WHERE key_hash = ?", (fingerprint,))
+            .execute("SELECT id FROM receipts WHERE key_hash = %s", (fingerprint,))
             .fetchone()
         )
         if existing:
@@ -295,7 +244,7 @@ def api_create_receipt():
         cursor = db().execute(
             """INSERT INTO receipts
             (key_hash, store, store_cnpj, issued_at, total, discount, approx_tax, shared)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (
                 fingerprint,
                 parsed["store"],
@@ -307,11 +256,11 @@ def api_create_receipt():
                 int(share_value == "yes"),
             ),
         )
-        receipt_id = cursor.lastrowid
+        receipt_id = cursor.fetchone()["id"]
         db().executemany(
             """INSERT INTO items
             (receipt_id, name, product_key, code, quantity, unit, unit_price, amount)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
             [
                 (
                     receipt_id,
@@ -338,7 +287,7 @@ def api_receipt_detail(receipt_id):
         db()
         .execute(
             """SELECT id, store, issued_at, total, discount, approx_tax, shared
-        FROM receipts WHERE id = ?""",
+        FROM receipts WHERE id = %s""",
             (receipt_id,),
         )
         .fetchone()
@@ -349,7 +298,7 @@ def api_receipt_detail(receipt_id):
         db()
         .execute(
             """SELECT id, name, quantity, unit, unit_price, amount
-        FROM items WHERE receipt_id = ? ORDER BY id""",
+        FROM items WHERE receipt_id = %s ORDER BY id""",
             (receipt_id,),
         )
         .fetchall()
@@ -363,7 +312,7 @@ def api_receipt_sharing(receipt_id):
     if type(payload.get("shared")) is not bool:
         return jsonify(error="Provide shared as true or false."), 400
     result = db().execute(
-        "UPDATE receipts SET shared = ? WHERE id = ?",
+        "UPDATE receipts SET shared = %s WHERE id = %s",
         (int(payload["shared"]), receipt_id),
     )
     if not result.rowcount:
@@ -379,7 +328,7 @@ def api_settings():
         mode = payload.get("share_mode")
         if mode not in {"ask", "always", "never"}:
             return jsonify(error="Invalid sharing preference."), 400
-        db().execute("UPDATE settings SET share_mode = ? WHERE id = 1", (mode,))
+        db().execute("UPDATE settings SET share_mode = %s WHERE id = 1", (mode,))
         db().commit()
     return jsonify(share_mode=setting())
 
@@ -392,7 +341,7 @@ def api_prices():
         .execute(
             """SELECT i.name, i.product_key, i.unit, i.unit_price,
         r.store, r.issued_at FROM items i JOIN receipts r ON r.id = i.receipt_id
-        WHERE r.shared = 1 AND i.name LIKE ?
+        WHERE r.shared = 1 AND i.name LIKE %s
         ORDER BY r.issued_at DESC, i.name LIMIT 200""",
             ("%" + query + "%",),
         )
@@ -407,13 +356,14 @@ def api_public_products():
     rows = (
         db()
         .execute(
-            """SELECT i.product_key, i.name, i.unit,
+            """SELECT i.product_key, MAX(i.name) AS name, MAX(i.unit) AS unit,
         COUNT(*) AS observation_count, COUNT(DISTINCT r.id) AS receipt_count,
         COUNT(DISTINCT r.store) AS store_count,
         MAX(r.issued_at) AS last_seen
         FROM items i JOIN receipts r ON r.id = i.receipt_id
-        WHERE r.shared = 1 AND i.name LIKE ?
-        GROUP BY i.product_key ORDER BY last_seen DESC, observation_count DESC LIMIT 150""",
+        WHERE r.shared = 1 AND i.name LIKE %s
+        GROUP BY i.product_key
+        ORDER BY last_seen DESC, observation_count DESC LIMIT 150""",
             ("%" + query + "%",),
         )
         .fetchall()
@@ -463,9 +413,12 @@ def api_public_product(slug):
 
 @app.route("/api/products")
 def api_products():
-    rows = db().execute("""SELECT i.product_key, i.name, i.unit, i.quantity,
-        MAX(r.issued_at) AS last_seen FROM items i JOIN receipts r ON r.id = i.receipt_id
-        GROUP BY i.product_key ORDER BY last_seen DESC, i.name LIMIT 250""").fetchall()
+    rows = db().execute("""SELECT * FROM (
+        SELECT DISTINCT ON (i.product_key) i.product_key, i.name, i.unit, i.quantity,
+        r.issued_at AS last_seen FROM items i
+        JOIN receipts r ON r.id = i.receipt_id
+        ORDER BY i.product_key, r.issued_at DESC, r.id DESC, i.id DESC
+        ) latest ORDER BY last_seen DESC, name LIMIT 250""").fetchall()
     return jsonify(products=[dict(row) for row in rows])
 
 
@@ -523,7 +476,7 @@ def api_dismiss_replenishment():
         db()
         .execute(
             """SELECT MAX(r.issued_at) AS last_bought
-        FROM items i JOIN receipts r ON r.id = i.receipt_id WHERE i.product_key = ?""",
+        FROM items i JOIN receipts r ON r.id = i.receipt_id WHERE i.product_key = %s""",
             (key,),
         )
         .fetchone()
@@ -531,7 +484,7 @@ def api_dismiss_replenishment():
     if not row["last_bought"]:
         return jsonify(error="Product not found."), 404
     db().execute(
-        """INSERT INTO dismissed_suggestions (product_key, last_bought) VALUES (?, ?)
+        """INSERT INTO dismissed_suggestions (product_key, last_bought) VALUES (%s, %s)
         ON CONFLICT(product_key) DO UPDATE SET last_bought = excluded.last_bought""",
         (key, row["last_bought"]),
     )
@@ -540,9 +493,12 @@ def api_dismiss_replenishment():
 
 
 def _select_plan_items(keys: list[str], overrides: dict) -> list[dict]:
-    rows = db().execute("""SELECT i.product_key, i.name, i.unit, i.quantity,
-        MAX(r.issued_at) AS last_seen FROM items i JOIN receipts r ON r.id = i.receipt_id
-        GROUP BY i.product_key ORDER BY last_seen DESC""").fetchall()
+    rows = db().execute("""SELECT * FROM (
+        SELECT DISTINCT ON (i.product_key) i.product_key, i.name, i.unit, i.quantity,
+        r.issued_at AS last_seen FROM items i
+        JOIN receipts r ON r.id = i.receipt_id
+        ORDER BY i.product_key, r.issued_at DESC, r.id DESC, i.id DESC
+        ) latest ORDER BY last_seen DESC""").fetchall()
     selected = []
     for row in rows:
         if row["product_key"] not in keys:
@@ -600,4 +556,5 @@ def api_plan():
 
 
 if __name__ == "__main__":
+    migrate(app.config["DATABASE_URL"])
     app.run(debug=True, host="127.0.0.1", port=5000)

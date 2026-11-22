@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:17
+    container_name: inventra-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: inventra
+      POSTGRES_USER: inventra
+      POSTGRES_PASSWORD: inventra
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventra -d inventra"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   zookeeper:
     image: zookeeper
     container_name: zookeeper
@@ -59,4 +77,5 @@ services:
       - "8081:8081"
   
 volumes:
+  postgres_data:
   mongo_data:
