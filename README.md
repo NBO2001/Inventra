@@ -30,7 +30,9 @@ npm install
 npm run dev
 ```
 
-Open <http://127.0.0.1:3000> on the computer, or `http://192.168.100.11:3000` on a phone connected to the same Wi-Fi (replace the IP if it changes). `npm run dev` uses Next.js's default network binding. The web app forwards `/api/*` to the API at `127.0.0.1:5000`. To try receipt import without personal data, upload `inventra-collector/mock-pages/page-mock.html` in **Adicionar nota**.
+Open <http://127.0.0.1:3000> on the computer, or `http://<YOUR_LAN_IP>:3000` on a phone connected to the same Wi-Fi. `npm run dev` uses Next.js's default network binding. The web app forwards `/api/*` to the API at `127.0.0.1:5000`. To try receipt import without personal data, upload `inventra-collector/mock-pages/page-mock.html` in **Adicionar nota**.
+
+For phone development, set `INVENTRA_DEV_ORIGIN` in `inventra-web/.env` to your computer's LAN IP (no `http://` or port). Copy `inventra-web/.env.example` if the file does not exist. The local `.env` file is ignored by Git.
 
 On a phone, **Escanear QR com a câmera** opens the camera to photograph the NFC-e QR code. The page decodes the image locally and fills the SEFAZ link; then tap **Conferir nota**. This photo capture approach works on the local HTTP address, where browsers do not allow a continuous camera stream. On some phones the button may open a camera/gallery chooser.
 
