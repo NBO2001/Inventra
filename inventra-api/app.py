@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import os
 import re
+import json
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
+from pathlib import Path
+from secrets import token_hex
 from statistics import median
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
@@ -23,6 +26,9 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "local-development-only")
 app.config["DATABASE_URL"] = os.environ.get("DATABASE_URL", DEFAULT_URL)
 app.config["MAX_CONTENT_LENGTH"] = 1_000_000
+app.config["QR_DEBUG_DIR"] = os.environ.get(
+    "QR_DEBUG_DIR", str(Path(__file__).resolve().parent / "instance" / "qr-debug")
+)
 SEFAZ_HOST = "sistemas.sefaz.am.gov.br"
 PRICE_MAX_AGE_DAYS = 30  # Pilot default; validate with Manaus shoppers.
 
@@ -174,9 +180,88 @@ def public_receipt(parsed):
     }
 
 
+@app.before_request
+def qr_debug_upload_limit():
+    if request.path == "/api/qr-debug":
+        request.max_content_length = 20_000_000
+
+
 @app.errorhandler(413)
 def too_large(_error):
+    if request.path == "/api/qr-debug":
+        return jsonify(error="The debug photo exceeds the 20 MB limit."), 413
     return jsonify(error="The receipt page exceeds the 1 MB limit."), 413
+
+
+@app.route("/api/qr-debug", methods=["POST"])
+def api_qr_debug():
+    uploaded = request.files.get("image")
+    reason = request.form.get("reason", "")
+    if not uploaded or reason not in {
+        "image_load_failed",
+        "canvas_unavailable",
+        "qr_not_found",
+        "invalid_url",
+        "unsupported_qr_url",
+        "unexpected_error",
+    }:
+        return jsonify(error="Invalid QR debug report."), 400
+    image = uploaded.read(19_000_001)
+    if len(image) > 19_000_000:
+        return jsonify(error="The debug photo exceeds the 19 MB image limit."), 413
+    if image.startswith(b"\xff\xd8\xff"):
+        suffix = ".jpg"
+    elif image.startswith(b"\x89PNG\r\n\x1a\n"):
+        suffix = ".png"
+    elif image[:4] == b"RIFF" and image[8:12] == b"WEBP":
+        suffix = ".webp"
+    elif image[4:8] == b"ftyp" and image[8:12] in {b"heic", b"heix", b"mif1"}:
+        suffix = ".heic"
+    else:
+        return jsonify(error="Unsupported debug image format."), 400
+    try:
+        attempts = json.loads(request.form.get("attempts", "[]"))
+    except json.JSONDecodeError:
+        return jsonify(error="Invalid QR debug attempts."), 400
+    if (
+        not isinstance(attempts, list)
+        or len(attempts) > 5
+        or any(
+            not isinstance(attempt, dict)
+            or set(attempt) != {"width", "height", "found"}
+            or type(attempt["width"]) is not int
+            or type(attempt["height"]) is not int
+            or type(attempt["found"]) is not bool
+            or not 0 < attempt["width"] <= 10000
+            or not 0 < attempt["height"] <= 10000
+            for attempt in attempts
+        )
+    ):
+        return jsonify(error="Invalid QR debug attempts."), 400
+    directory = Path(app.config["QR_DEBUG_DIR"])
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    report_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + token_hex(6)
+    image_path = directory / f"{report_id}{suffix}"
+    metadata = {
+        "reason": reason,
+        "attempts": attempts,
+        "image_bytes": len(image),
+        "image_format": suffix,
+        "user_agent": request.user_agent.string[:300],
+    }
+    image_path.write_bytes(image)
+    image_path.chmod(0o600)
+    report_path = directory / f"{report_id}.json"
+    report_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
+    report_path.chmod(0o600)
+    app.logger.warning(
+        "QR capture failed: id=%s reason=%s attempts=%s image=%s",
+        report_id,
+        reason,
+        attempts,
+        image_path,
+    )
+    return jsonify(id=report_id), 201
 
 
 @app.route("/api/dashboard")
@@ -218,6 +303,11 @@ def api_preview():
     try:
         return jsonify(receipt=public_receipt(receipt_from_request()))
     except (ReceiptParseError, OSError, ValueError) as exc:
+        app.logger.warning(
+            "Receipt preview failed: source=%s error_type=%s",
+            "qr_url" if request.form.get("qr_url") else "html",
+            type(exc).__name__,
+        )
         return jsonify(error=str(exc)), 400
 
 

@@ -113,6 +113,31 @@ def test_parser_reads_sample_without_raw_private_data():
     assert receipt["total"] is not None
 
 
+def test_failed_qr_photo_is_saved_with_diagnostics(tmp_path):
+    previous = dict(app.config)
+    app.config.update(TESTING=True, QR_DEBUG_DIR=str(tmp_path / "qr-debug"))
+    photo = b"\xff\xd8\xff" + b"a" * 1_100_000
+    try:
+        response = app.test_client().post(
+            "/api/qr-debug",
+            data={
+                "image": (BytesIO(photo), "photo.jpg"),
+                "reason": "qr_not_found",
+                "attempts": '[{"width":1200,"height":900,"found":false}]',
+            },
+        )
+        assert response.status_code == 201
+        report_id = response.json["id"]
+        directory = tmp_path / "qr-debug"
+        assert (directory / f"{report_id}.jpg").read_bytes() == photo
+        assert (
+            '"reason": "qr_not_found"' in (directory / f"{report_id}.json").read_text()
+        )
+        assert not list(tmp_path.glob("*.jpg"))
+    finally:
+        app.config.update(previous)
+
+
 def test_import_dashboard_duplicate_and_withdrawal(client):
     preview = client.post(
         "/api/receipts/preview",
