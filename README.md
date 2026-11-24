@@ -39,9 +39,9 @@ Open <http://127.0.0.1:3000> on the computer, or `http://<YOUR_LAN_IP>:3000` on 
 
 For phone development, set `INVENTRA_DEV_ORIGIN` in `inventra-web/.env` to your computer's LAN IP (no `http://` or port). Copy `inventra-web/.env.example` if the file does not exist. The local `.env` file is ignored by Git.
 
-On a phone, **Escanear QR com a câmera** opens the camera to photograph the NFC-e QR code. The page decodes the image locally and fills the SEFAZ link; then tap **Conferir nota**. This photo capture approach works on the local HTTP address, where browsers do not allow a continuous camera stream. On some phones the button may open a camera/gallery chooser.
+On a phone, **Escanear QR com a câmera** opens the camera to photograph the NFC-e QR code. The photo is sent to the local API, which reads the QR and returns a validated SEFAZ-AM link; then tap **Conferir nota**. This photo capture approach works on the local HTTP address, where browsers do not allow a continuous camera stream. On some phones the button may open a camera/gallery chooser.
 
-If QR capture fails, the browser logs the decoding attempts and sends the failed photo to the local API. The API saves the image and a JSON report in `inventra-api/instance/qr-debug/` (ignored by Git), logs the report ID and reason, and shows the ID on the phone. The JSON report records the failure stage and attempted image sizes without storing the decoded URL. Set `QR_DEBUG_DIR` to change the local directory; remove old reports when debugging is complete. A successfully decoded image stays on the phone.
+If QR recognition fails, the API saves the photo and a JSON report in `inventra-api/instance/qr-debug/` (ignored by Git), logs the report ID and reason, and shows the ID on the phone. The report records attempted image sizes without storing the decoded URL. Set `QR_DEBUG_DIR` to change the local directory; remove old reports when debugging is complete. Successfully decoded photos are discarded after recognition.
 
 This prototype has no login, so use a trusted network while it is running.
 

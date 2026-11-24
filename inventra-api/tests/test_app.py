@@ -8,11 +8,13 @@ from uuid import uuid4
 import pytest
 import psycopg
 from psycopg import sql
+from PIL import Image
+import zxingcpp
 
 from app import app, db
 from import_sqlite import import_sqlite
 from migrate import DEFAULT_URL, migrate
-from receipt_parser import parse_receipt
+from domain.receipt_parser import parse_receipt
 
 SAMPLE = (
     Path(__file__).resolve().parents[2]
@@ -134,6 +136,62 @@ def test_failed_qr_photo_is_saved_with_diagnostics(tmp_path):
             '"reason": "qr_not_found"' in (directory / f"{report_id}.json").read_text()
         )
         assert not list(tmp_path.glob("*.jpg"))
+    finally:
+        app.config.update(previous)
+
+
+def synthetic_qr_photo(value: str, rotate=False) -> BytesIO:
+    barcode = zxingcpp.create_barcode(value, zxingcpp.BarcodeFormat.QRCode)
+    image = Image.fromarray(barcode.to_image(scale=6)).convert("RGB")
+    if rotate:
+        image = image.rotate(90, expand=True)
+    photo = BytesIO()
+    image.save(photo, format="JPEG", quality=92)
+    photo.seek(0)
+    return photo
+
+
+def test_backend_decodes_generated_sefaz_qr_photos(tmp_path):
+    previous = dict(app.config)
+    app.config.update(TESTING=True, QR_DEBUG_DIR=str(tmp_path / "qr-debug"))
+    try:
+        client = app.test_client()
+        for value in (
+            "https://sistemas.sefaz.am.gov.br/nfceweb/consultarNFCe.jsp?p=FAKE-TEST",
+            "sistemas.sefaz.am.gov.br/nfceweb/consultarNFCe.jsp?p=FAKE-TEST",
+        ):
+            response = client.post(
+                "/api/qr/decode",
+                data={"image": (synthetic_qr_photo(value, rotate=True), "qr.jpg")},
+            )
+            assert response.status_code == 200
+            assert response.json["url"].startswith("https://sistemas.sefaz.am.gov.br/")
+        assert not (tmp_path / "qr-debug").exists()
+    finally:
+        app.config.update(previous)
+
+
+def test_backend_rejects_unrelated_or_missing_qr_and_saves_failures(tmp_path):
+    previous = dict(app.config)
+    app.config.update(TESTING=True, QR_DEBUG_DIR=str(tmp_path / "qr-debug"))
+    try:
+        client = app.test_client()
+        unrelated = client.post(
+            "/api/qr/decode",
+            data={"image": (synthetic_qr_photo("https://example.com/other"), "qr.jpg")},
+        )
+        assert unrelated.status_code == 422
+        assert unrelated.json["reason"] == "unsupported_qr_url"
+
+        blank = BytesIO()
+        Image.new("RGB", (400, 400), "white").save(blank, format="PNG")
+        blank.seek(0)
+        missing = client.post("/api/qr/decode", data={"image": (blank, "blank.png")})
+        assert missing.status_code == 422
+        assert missing.json["reason"] == "qr_not_found"
+        directory = tmp_path / "qr-debug"
+        assert (directory / f"{unrelated.json['id']}.jpg").exists()
+        assert (directory / f"{missing.json['id']}.png").exists()
     finally:
         app.config.update(previous)
 
