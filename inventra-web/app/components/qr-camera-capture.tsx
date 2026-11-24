@@ -2,18 +2,13 @@
 
 import { useState } from "react";
 import jsQR from "jsqr";
+import { QrCaptureError, validateSefazUrl } from "./qr-url";
 
 type Props = {
   onDecoded: (url: string) => void;
 };
 
 type Attempt = { width: number; height: number; found: boolean };
-
-class QrCaptureError extends Error {
-  constructor(message: string, readonly reason: string) {
-    super(message);
-  }
-}
 
 async function loadImage(file: File): Promise<HTMLImageElement> {
   const objectUrl = URL.createObjectURL(file);
@@ -47,24 +42,6 @@ async function readQr(file: File, attempts: Attempt[]): Promise<string> {
     if (code) return code.data;
   }
   throw new QrCaptureError("Não encontrei o QR code. Aproxime a câmera e tente novamente.", "qr_not_found");
-}
-
-function validateSefazUrl(value: string): string {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new QrCaptureError("O QR code não contém um link de NFC-e da SEFAZ-AM.", "invalid_url");
-  }
-  if (
-    !["http:", "https:"].includes(url.protocol) ||
-    url.hostname !== "sistemas.sefaz.am.gov.br" ||
-    url.pathname !== "/nfceweb/consultarNFCe.jsp" ||
-    !url.searchParams.get("p")
-  ) {
-    throw new QrCaptureError("Este QR code não é de uma NFC-e da SEFAZ-AM compatível.", "unsupported_qr_url");
-  }
-  return url.toString();
 }
 
 async function saveFailedCapture(file: File, reason: string, attempts: Attempt[]): Promise<string> {
