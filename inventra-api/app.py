@@ -228,10 +228,13 @@ def api_qr_debug():
         or len(attempts) > 5
         or any(
             not isinstance(attempt, dict)
-            or set(attempt) != {"width", "height", "found"}
+            or not {"width", "height", "found"} <= set(attempt)
+            or not set(attempt) <= {"width", "height", "found", "rotation"}
             or type(attempt["width"]) is not int
             or type(attempt["height"]) is not int
             or type(attempt["found"]) is not bool
+            or attempt.get("rotation", "none")
+            not in {"none", "clockwise", "counterclockwise"}
             or not 0 < attempt["width"] <= 10000
             or not 0 < attempt["height"] <= 10000
             for attempt in attempts

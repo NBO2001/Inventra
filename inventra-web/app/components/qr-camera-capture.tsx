@@ -8,7 +8,7 @@ type Props = {
   onDecoded: (url: string) => void;
 };
 
-type Attempt = { width: number; height: number; found: boolean };
+type Attempt = { width: number; height: number; found: boolean; rotation: "none" | "clockwise" | "counterclockwise" };
 
 async function loadImage(file: File): Promise<HTMLImageElement> {
   const objectUrl = URL.createObjectURL(file);
@@ -38,7 +38,25 @@ async function readQr(file: File, attempts: Attempt[]): Promise<string> {
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
     const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
     const code = jsQR(pixels.data, pixels.width, pixels.height);
-    attempts.push({ width: canvas.width, height: canvas.height, found: Boolean(code) });
+    attempts.push({ width: canvas.width, height: canvas.height, found: Boolean(code), rotation: "none" });
+    if (code) return code.data;
+  }
+  const uprightWidth = canvas.width;
+  const uprightHeight = canvas.height;
+  for (const rotation of ["clockwise", "counterclockwise"] as const) {
+    canvas.width = uprightHeight;
+    canvas.height = uprightWidth;
+    if (rotation === "clockwise") {
+      context.translate(uprightHeight, 0);
+      context.rotate(Math.PI / 2);
+    } else {
+      context.translate(0, uprightWidth);
+      context.rotate(-Math.PI / 2);
+    }
+    context.drawImage(image, 0, 0, uprightWidth, uprightHeight);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(pixels.data, pixels.width, pixels.height);
+    attempts.push({ width: canvas.width, height: canvas.height, found: Boolean(code), rotation });
     if (code) return code.data;
   }
   throw new QrCaptureError("Não encontrei o QR code. Aproxime a câmera e tente novamente.", "qr_not_found");

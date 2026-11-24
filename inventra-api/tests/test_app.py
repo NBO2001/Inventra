@@ -123,7 +123,7 @@ def test_failed_qr_photo_is_saved_with_diagnostics(tmp_path):
             data={
                 "image": (BytesIO(photo), "photo.jpg"),
                 "reason": "qr_not_found",
-                "attempts": '[{"width":1200,"height":900,"found":false}]',
+                "attempts": '[{"width":1200,"height":900,"found":false,"rotation":"counterclockwise"}]',
             },
         )
         assert response.status_code == 201
