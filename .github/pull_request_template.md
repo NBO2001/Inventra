@@ -13,3 +13,5 @@
 ## Review notes
 
 <!-- Call out migrations, privacy or security effects, deployment steps, and known limitations when relevant. -->
+
+<!-- If an AI agent authored this PR, end the body with an italic model signature, for example: _by Codex GPT-6_. -->
