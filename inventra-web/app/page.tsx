@@ -112,7 +112,10 @@ export default function Home() {
     try {
       const data = await api<{ receipt: Preview }>("/receipts/preview", { method: "POST", body: sourceData() });
       setPreview(data.receipt);
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) {
+      console.warn("Receipt preview failed", { source: file ? "html" : "qr_url", error: e });
+      setError((e as Error).message);
+    }
     finally { setBusy(false); }
   };
 
